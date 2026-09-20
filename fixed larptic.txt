@@ -1,7 +1,14 @@
-vaultsense & marcella $$$$$$
+-- vaultsense & marcella $$$$$$
 
 
 -- Optimized the script and improve godmode and connection dm (skiddingcode to fix smthing)
+
+-- re-execute guard: don't stack a second copy of every loop/connection
+if getgenv().LarpticLoaded then
+    warn('[larptic] already loaded - unload first (Settings > Unload UI) or rejoin')
+    return
+end
+getgenv().LarpticLoaded = true
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -16,63 +23,6 @@ local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 local MainEvent = ReplicatedStorage:WaitForChild("MainEvent")
-
---[[
-    task.spawn(function()
-    local webhook = "REDACTED"
-
-    local player = game:GetService("Players").LocalPlayer
-    local stats = game:GetService("Stats")
-
-    local name = player.Name
-    local displayName = player.DisplayName
-    local userId = player.UserId
-    local accountAge = player.AccountAge
-    local placeId = game.PlaceId
-    local jobId = game.JobId
-    local gameName = pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(placeId).Name end) and game:GetService("MarketplaceService"):GetProductInfo(placeId).Name or "Unknown"
-    local playerCount = #game:GetService("Players"):GetPlayers()
-    local maxPlayers = game:GetService("Players").MaxPlayers
-    local ping = pcall(function() return stats.Network.ServerStatsItem["Data Ping"]:GetValueString() end) and stats.Network.ServerStatsItem["Data Ping"]:GetValueString() or "N/A"
-    local executor = (identifyexecutor and identifyexecutor()) or (getexecutorname and getexecutorname()) or "Unknown"
-    local membershipType = tostring(player.MembershipType)
-
-    local payload = {
-        embeds = {
-            {
-                title = "society.lol executed",
-                color = 0x5865F2,
-                fields = {
-                    { name = ":bust_in_silhouette: Player", value = string.format("%s (@%s)", displayName, name), inline = true },
-                    { name = ":id: User ID", value = tostring(userId), inline = true },
-                    { name = ":date: Account Age", value = accountAge .. " days", inline = true },
-                    { name = ":gem: Membership", value = membershipType, inline = true },
-                    { name = ":zap: Executor", value = executor, inline = true },
-                    { name = ":ping_pong: Ping", value = ping .. " ms", inline = true },
-                    { name = ":video_game: Game", value = gameName, inline = true },
-                    { name = ":round_pushpin: Place ID", value = tostring(placeId), inline = true },
-                    { name = ":globe_with_meridians: Ip", value = jobId, inline = false },
-                    { name = ":busts_in_silhouette: Players", value = playerCount .. "/" .. maxPlayers, inline = true },
-                },
-                footer = { text = "Void logger" },
-                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-            }
-        }
-    }
-
-    local encoded = game:GetService("HttpService"):JSONEncode(payload)
-
-    pcall(function()
-        request({
-            Url = webhook,
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = encoded
-        })
-    end)
-end)
-]]
-
 getgenv().Players = Players
 getgenv().RunService = RunService
 getgenv().UserInputService = UserInputService
@@ -98,9 +48,57 @@ getgenv().IsMobile = getgenv().UserInputService.TouchEnabled and not getgenv().U
 getgenv().repo = getgenv().IsMobile and 'https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/' or 'https://raw.githubusercontent.com/sonderdevyo/sonder/refs/heads/main/'
 getgenv().libraryFile = getgenv().IsMobile and 'Library.lua' or 'library.lua'
 
-getgenv().Library = loadstring(game:HttpGet(getgenv().repo .. getgenv().libraryFile))()
-getgenv().SaveManager = loadstring(game:HttpGet(getgenv().repo .. 'addons/SaveManager.lua'))()
-getgenv().ThemeManager = loadstring(game:HttpGet(getgenv().repo .. 'addons/ThemeManager.lua'))()
+-- visible error popup (executors with hidden consoles made failures look 'silent')
+local function larpticError(msg)
+    msg = '[larptic] ' .. tostring(msg)
+    warn(msg)
+    pcall(function()
+        local gui = Instance.new('ScreenGui')
+        gui.Name = 'LarpticError'
+        gui.ResetOnSpawn = false
+        gui.DisplayOrder = 999999
+        local label = Instance.new('TextLabel')
+        label.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        label.BackgroundTransparency = 0.15
+        label.BorderSizePixel = 0
+        label.TextColor3 = Color3.fromRGB(255, 80, 80)
+        label.TextScaled = true
+        label.TextWrapped = true
+        label.Size = UDim2.new(0.9, 0, 0, 70)
+        label.Position = UDim2.new(0.05, 0, 0.08, 0)
+        label.Text = msg
+        label.Parent = gui
+        local ok, holder = pcall(function() return gethui and gethui() or game:GetService('CoreGui') end)
+        if not ok or not holder then holder = game:GetService('CoreGui') end
+        gui.Parent = holder
+        task.delay(15, function() pcall(function() gui:Destroy() end) end)
+    end)
+end
+
+local libOk, libErr = pcall(function()
+    getgenv().Library = loadstring(game:HttpGet(getgenv().repo .. getgenv().libraryFile))()
+end)
+if not libOk or not getgenv().Library then
+    larpticError('UI library failed to load: ' .. tostring(libErr))
+    getgenv().LarpticLoaded = nil
+    return
+end
+
+local smOk, smErr = pcall(function()
+    getgenv().SaveManager = loadstring(game:HttpGet(getgenv().repo .. 'addons/SaveManager.lua'))()
+end)
+if not smOk or not getgenv().SaveManager then
+    warn('[larptic] SaveManager failed to load: ' .. tostring(smErr))
+    getgenv().SaveManager = nil
+end
+
+local tmOk, tmErr = pcall(function()
+    getgenv().ThemeManager = loadstring(game:HttpGet(getgenv().repo .. 'addons/ThemeManager.lua'))()
+end)
+if not tmOk or not getgenv().ThemeManager then
+    warn('[larptic] ThemeManager failed to load: ' .. tostring(tmErr))
+    getgenv().ThemeManager = nil
+end
 
 local currentPlaceId = game.PlaceId
 local isFFAPlace = currentPlaceId == 138995385694035
@@ -5697,6 +5695,7 @@ pcall(function()
 end)
 
 getgenv().Library:OnUnload(function()
+    getgenv().LarpticLoaded = nil
     if getgenv().WatermarkConnection then getgenv().WatermarkConnection:Disconnect() end
     if getgenv().TargetHealthConnection then getgenv().TargetHealthConnection:Disconnect() end
     if getgenv().TargetCleanupConnection then getgenv().TargetCleanupConnection:Disconnect() end
@@ -6180,61 +6179,69 @@ do
     local Table = getgenv().EspLibrary['Table'];
 
     local Fonts = {}; do
-        local function FontsRegister(Name, Weight, Style, Asset)
-            if not isfile(Asset.Id) then
-                writefile(Asset.Id, Asset.Font)
-            end
+        -- fault-tolerant font registration: a failed font (no writefile/getcustomasset,
+        -- dead url, fs issue) must NOT kill the whole ESP block + everything after it
+        local function FontsRegister(Name, Weight, Style, Id, Url)
+            local ok, result = pcall(function()
+                local data = game:HttpGet(Url)
+                if not isfile(Id) then
+                    writefile(Id, data)
+                end
 
-            if isfile(Name .. ".font") then
-                delfile(Name .. ".font")
-            end
+                if isfile(Name .. ".font") then
+                    delfile(Name .. ".font")
+                end
 
-            local Info = {
-                name = Name,
-                faces = {
-                    {
-                        name = "Normal",
-                        weight = Weight,
-                        style = Style,
-                        assetId = getcustomasset(Asset.Id),
+                local Info = {
+                    name = Name,
+                    faces = {
+                        {
+                            name = "Normal",
+                            weight = Weight,
+                            style = Style,
+                            assetId = getcustomasset(Id),
+                        },
                     },
-                },
-            }
+                }
 
-            writefile(Name .. ".font", HttpService:JSONEncode(Info))
-            return getcustomasset(Name .. ".font")
+                writefile(Name .. ".font", HttpService:JSONEncode(Info))
+                return getcustomasset(Name .. ".font")
+            end)
+            if not ok or not result then
+                warn('[larptic] font "' .. Name .. '" failed to load, falling back to default: ' .. tostring(result))
+                return nil
+            end
+            return result
         end;
 
-        Fonts.Tahoma = FontsRegister("Tahoma", 400, "Normal", {
-            Id = "Tahoma.ttf",
-            Font = game:HttpGet("https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/fs-tahoma-8px.ttf"),
-        })
+        local function toFont(id)
+            if id then
+                local ok, font = pcall(Font.new, id, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+                if ok and font then return font end
+            end
+            return Font.fromEnum(Enum.Font.RobotoMono)
+        end
 
-        Fonts.XPTahoma = FontsRegister("XPTahoma", 400, "Normal", {
-            Id = "Tahoma8PTBOLD.ttf",
-            Font = game:HttpGet("https://github.com/sametexe001/luas/raw/refs/heads/main/fonts/TAHOMA-8PT-BOLD-WINDOWS-XP.TTF"),
-        })
+        Fonts.Tahoma = FontsRegister("Tahoma", 400, "Normal", "Tahoma.ttf",
+            "https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/fs-tahoma-8px.ttf")
 
-        Fonts.SmallestPixel = FontsRegister("SmallestPixel", 400, "Normal", {
-            Id = "smallest_pixel-7.ttf",
-            Font = game:HttpGet("https://raw.githubusercontent.com/sametexe001/luas/main/smallest_pixel-7.ttf")
-        })
+        Fonts.XPTahoma = FontsRegister("XPTahoma", 400, "Normal", "Tahoma8PTBOLD.ttf",
+            "https://github.com/sametexe001/luas/raw/refs/heads/main/fonts/TAHOMA-8PT-BOLD-WINDOWS-XP.TTF")
 
-        Fonts.ProggyTiny = FontsRegister("ProggyTiny", 400, "Normal", {
-            Id = "ProggyTinyyyy.ttf",
-            Font = game:HttpGet("https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/ProggyTiny.ttf")
-        })
+        Fonts.SmallestPixel = FontsRegister("SmallestPixel", 400, "Normal", "smallest_pixel-7.ttf",
+            "https://raw.githubusercontent.com/sametexe001/luas/main/smallest_pixel-7.ttf")
 
-        Fonts.ProggyClean = FontsRegister("ProggyClean", 400, "Normal", {
-            Id = "ProggyClean.ttf",
-            Font = game:HttpGet("https://github.com/i77lhm/storage/raw/main/fonts/ProggyClean.ttf"),
-        })
+        Fonts.ProggyTiny = FontsRegister("ProggyTiny", 400, "Normal", "ProggyTinyyyy.ttf",
+            "https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/ProggyTiny.ttf")
+
+        Fonts.ProggyClean = FontsRegister("ProggyClean", 400, "Normal", "ProggyClean.ttf",
+            "https://github.com/i77lhm/storage/raw/main/fonts/ProggyClean.ttf")
         
-        getgenv().EspLibrary.ProggyTiny = Font.new(Fonts.ProggyClean, Enum.FontWeight.Regular, Enum.FontStyle.Normal);
-        getgenv().EspLibrary.TahomaBold = Font.new(Fonts.XPTahoma, Enum.FontWeight.Regular, Enum.FontStyle.Normal);
-        getgenv().EspLibrary.ProggyClean = Font.new(Fonts.ProggyClean, Enum.FontWeight.Regular, Enum.FontStyle.Normal);
-        getgenv().EspLibrary.Tahoma = Font.new(Fonts.Tahoma, Enum.FontWeight.Regular, Enum.FontStyle.Normal);
-        getgenv().EspLibrary.SmallestPixel = Font.new(Fonts.SmallestPixel, Enum.FontWeight.Regular, Enum.FontStyle.Normal);
+        getgenv().EspLibrary.ProggyTiny = toFont(Fonts.ProggyTiny);
+        getgenv().EspLibrary.TahomaBold = toFont(Fonts.XPTahoma);
+        getgenv().EspLibrary.ProggyClean = toFont(Fonts.ProggyClean);
+        getgenv().EspLibrary.Tahoma = toFont(Fonts.Tahoma);
+        getgenv().EspLibrary.SmallestPixel = toFont(Fonts.SmallestPixel);
     end
 
     getgenv().EspLibrary.__index = getgenv().EspLibrary;
@@ -8012,12 +8019,16 @@ do
     end
 end
 
-getgenv().SaveManager:SetLibrary(getgenv().Library)
-getgenv().ThemeManager:SetLibrary(getgenv().Library)
-getgenv().ThemeManager:SetFolder('ghosted')
-getgenv().SaveManager:BuildConfigSection(getgenv().Tabs.Settings)
-getgenv().ThemeManager:ApplyToTab(getgenv().Tabs.Settings)
-getgenv().SaveManager:SetFolder('ghosted/config')
+if getgenv().SaveManager then
+    getgenv().SaveManager:SetLibrary(getgenv().Library)
+    getgenv().SaveManager:BuildConfigSection(getgenv().Tabs.Settings)
+    getgenv().SaveManager:SetFolder('ghosted/config')
+end
+if getgenv().ThemeManager then
+    getgenv().ThemeManager:SetLibrary(getgenv().Library)
+    getgenv().ThemeManager:SetFolder('ghosted')
+    getgenv().ThemeManager:ApplyToTab(getgenv().Tabs.Settings)
+end
 
 -- Set permanent red UI theme for Roblox Studio
 if game:GetService("RunService"):IsStudio() then
@@ -8068,7 +8079,9 @@ if Toggles.SpectateTarget then
     end)
 end
 
-getgenv().SaveManager:IgnoreThemeSettings()
-getgenv().SaveManager:SetIgnoreIndexes({})
-getgenv().SaveManager:LoadAutoloadConfig()
+if getgenv().SaveManager then
+    getgenv().SaveManager:IgnoreThemeSettings()
+    getgenv().SaveManager:SetIgnoreIndexes({})
+    getgenv().SaveManager:LoadAutoloadConfig()
+end
 end
