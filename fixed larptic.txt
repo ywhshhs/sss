@@ -84,6 +84,12 @@ if not libOk or not getgenv().Library then
     return
 end
 
+-- mobile Linoria (mstudio45) exposes Toggles/Options only as Library fields and
+-- never sets the getgenv globals the desktop lib sets - bridge them or every
+-- feature callback errors with 'attempt to index nil' on mobile executors
+getgenv().Toggles = getgenv().Toggles or (getgenv().Library.Toggles or {})
+getgenv().Options = getgenv().Options or (getgenv().Library.Options or {})
+
 local smOk, smErr = pcall(function()
     getgenv().SaveManager = loadstring(game:HttpGet(getgenv().repo .. 'addons/SaveManager.lua'))()
 end)
