@@ -1784,7 +1784,16 @@ getgenv().RunService.Heartbeat:Connect(function(dt)
     desync.old_position = root.CFrame
     local target = desync.old_position
     if desync.mode == "void" then
-        target = CFrame.new(root.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
+        -- juju-style proper void: dip BELOW the map (valid coords, unhittable) for one
+        -- frame — the RenderStepped restore beats the engine's destroy check. Small ±20
+        -- X/Z drift (not 9e8 garbage), ping-adaptive pulse, and NEVER right after a shot
+        -- (origin must stay consistent around shots — that was the mismatch flag).
+        if tick() - (getgenv().ForceHit.LastShotTime or 0) < 0.15 then return end
+        local pingMs = 0
+        pcall(function() pingMs = tonumber(game:GetService("Stats").Network.ServerStatsItem["Data Ping"].GetValue()) or 0 end)
+        if os.clock() - (desync.last_void or 0) <= 0.1 + pingMs / 1000 then return end
+        desync.last_void = os.clock()
+        target = CFrame.new(root.Position + Vector3.new(math.random(-20, 20), -(9e9 - 1000), math.random(-20, 20)))
     elseif desync.mode == "spam void" then
         desync.timer += dt
         if desync.timer < desync.void_time then
