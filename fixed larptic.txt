@@ -988,6 +988,38 @@ end
 
 getgenv().Shoot = function(p)
     if not p or not p.Character then return end
+
+    -- HOOD CUSTOMS (9825515356): mouse-pos based shooting (juju-style). Stream the aim
+    -- position via UpdateMousePos, then trigger the game's OWN shot (tool:Activate) so
+    -- the shot args are built by the game itself — always internally consistent = no
+    -- origin mismatch flags. Requires holding a gun (the game validates it).
+    if isHoodCustomPlace then
+        local character = p.Character
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then return end
+        local be = character:FindFirstChild("BodyEffects")
+        if be and be:FindFirstChild("SDeath") and be["SDeath"].Value then return end
+
+        local myChar = getgenv().LocalPlayer.Character
+        local tool = myChar and myChar:FindFirstChildWhichIsA("Tool")
+        if not tool then return end -- need a real gun: the game builds the shot itself
+
+        local targetPart = character:FindFirstChild(Options.HitPart and Options.HitPart.Value or "Head")
+            or character:FindFirstChild("Head")
+            or character:FindFirstChild("HumanoidRootPart")
+        if not targetPart then return end
+
+        pcall(function()
+            getgenv().MainEvent:FireServer("UpdateMousePos", targetPart.Position)
+        end)
+        pcall(function()
+            tool:Activate()
+        end)
+        getgenv().LastShotTime = tick()
+        getgenv().ForceHit.LastShotTime = tick()
+        return
+    end
+
     local character = p.Character
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     
