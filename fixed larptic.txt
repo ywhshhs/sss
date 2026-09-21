@@ -1012,6 +1012,13 @@ getgenv().Shoot = function(p)
     -- origin always matches what the server sees (no origin mismatch flags possible)
     local playerPos = root.Position
 
+    -- Wallbang (fun feature): fire "from" the target itself -> LOS trivially passes ->
+    -- the shot lands through walls. NOTE: the AC will flag origin mismatch on every shot
+    -- (origin is at the target, you are not) — anti-kick is your friend here.
+    if Toggles.WallbangMode and Toggles.WallbangMode.Value then
+        playerPos = targetPart.Position
+    end
+
     if Toggles.WallCheck.Value then
         local rayParams = RaycastParams.new()
         rayParams.FilterDescendantsInstances = {char, character, getgenv().DesyncPart}
@@ -2204,6 +2211,45 @@ local function resetStrafeCamera()
 end
 
 KillAura:AddToggle("SpectateTarget", {Text="Spectate Target", Default=false})
+KillAura:AddToggle("WallbangMode", {Text="Wallbang (shoot through walls - FUN, will flag)", Default=false})
+
+local toggle = KillAura:AddToggle("StrafeToggle", {Text="Target Strafe", Default=false, Callback=function(v)
+    strafeToggleEnabled = v
+    getgenv().ForceHit.StrafeEnabled = v and strafeKeybindEnabled
+    if not v then
+        resetStrafeCamera()
+        getgenv().ForceHit.LookAtTarget = true
+    end
+end})
+
+toggle:AddKeyPicker("StrafeKeybind", {Default="N", Mode="Toggle", NoSync=true, Text="Target Strafe", Callback=function(s)
+    strafeKeybindEnabled = s
+    getgenv().ForceHit.StrafeEnabled = strafeToggleEnabled and s
+    if not s then
+        resetStrafeCamera()
+        getgenv().ForceHit.LookAtTarget = true
+    end
+end})
+
+-- "Spoof" toggle removed: the old blink-spoof (teleport + restore) caused real/spoof
+-- oscillation = origin mismatch flags. Replaced by juju-style consistent csync apply.
+
+KillAura:AddToggle("visualizestrafe", {Text="Visualize Strafe", Default=false, Callback=function(v)
+    getgenv().ForceHit.VisualizeStrafe = v
+    if not v and getgenv().ForceHit.Visualizer then
+        getgenv().ForceHit.Visualizer:Destroy()
+        getgenv().ForceHit.Visualizer = nil
+        getgenv().ForceHit.VisualizerMotors = nil
+    end
+end})
+
+
+KillAura:AddSlider("StrafeSpeedSlider", {Text="Strafe Speed", Min=1, Max=30, Default=5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeSpeed=v end})
+KillAura:AddSlider("StrafeDistanceSlider", {Text="Strafe Distance", Min=1, Max=20, Default=5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeDistance=v end})
+KillAura:AddSlider("StrafeHeightSlider", {Text="Strafe Height", Min=-15, Max=15, Default=0.5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeHeight=v end})
+
+KillAura:AddDropdown("StrafeModeDropdown", {Values={"Orbit","Random"}, Default="Orbit", Text="Strafe Mode", Callback=function(v) getgenv().ForceHit.StrafeMode=v end})
+KillAura:AddSlider("StrafeDelaySlider", {Text="Reposition Delay (flag reducer)", Min=0, Max=0.25, Default=0, Rounding=2, Callback=function(v) getgenv().ForceHit.StrafeRepositionDelay=v end})
 local function destroyStrafeVisualizer()
     if getgenv().ForceHit.StrafeVisConnection then
         getgenv().ForceHit.StrafeVisConnection:Disconnect()
@@ -2252,6 +2298,111 @@ local function createStrafeVisualizer()
         end
     end)
 end
+
+local function stopStrafe()
+    if getgenv().ForceHit.StrafeConnection then
+        getgenv().ForceHit.StrafeConnection:Disconnect()
+        getgenv().ForceHit.StrafeConnection = nil
+    end
+    destroyStrafeVisualizer()
+    resetStrafeCamera()
+    getgenv().ForceHit.LookAtTarget = true
+end
+
+local function startStrafe()
+    if getgenv().ForceHit.StrafeConnection then
+        getgenv().ForceHit.StrafeConnection:Disconnect()
+        getgenv().ForceHit.StrafeConnection = nil
+    end
+    if getgenv().ForceHit.VisualizeStrafe then createStrafeVisualizer() end
+
+    getgenv().ForceHit.LookAtTarget = false
+
+    local strafeTime = 0
+    local lastReposition = 0
+
+    getgenv().ForceHit.StrafeConnection = RunService.Heartbeat:Connect(function(dt)
+        strafeTime += dt
+
+        if not getgenv().ForceHit.StrafeEnabled or not getgenv().ForceHitTarget then
+            stopStrafe()
+            return
+        end
+
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local targetChar = getgenv().ForceHitTarget.Character
+        local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+        local targetHum = targetChar and targetChar:FindFirstChildWhichIsA("Humanoid")
+
+        if not (root and targetRoot and targetHum and targetHum.Health > 0) then
+            stopStrafe()
+            return
+        end
+
+        -- reposition throttle: fewer replicated teleports per second = fewer AC flags
+        local repositionDelay = getgenv().ForceHit.StrafeRepositionDelay or 0
+        if repositionDelay > 0 then
+            if (strafeTime - lastReposition) < repositionDelay then return end
+            lastReposition = strafeTime
+        end
+
+        local targetPos = targetRoot.Position
+        local desired
+
+        if getgenv().ForceHit.StrafeMode == "Orbit" then
+            local angle = strafeTime * (getgenv().ForceHit.StrafeSpeed or 5)
+            desired = CFrame.lookAt(
+                targetPos + Vector3.new(
+                    math.cos(angle) * (getgenv().ForceHit.StrafeDistance or 8),
+                    getgenv().ForceHit.StrafeHeight or 0,
+                    math.sin(angle) * (getgenv().ForceHit.StrafeDistance or 8)
+                ),
+                targetPos
+            )
+
+        elseif getgenv().ForceHit.StrafeMode == "Random" then
+            local t = strafeTime * 40
+            local offset = Vector3.new(
+                math.noise(t,0,0) * 20,
+                math.noise(0,t,0) * 15 + (getgenv().ForceHit.StrafeHeight or 0),
+                math.noise(0,0,t) * 20
+            )
+            desired = CFrame.lookAt(targetPos + offset, targetPos)
+        end
+
+        if not desired then return end
+
+        -- csync (juju-style): the orbit position is what replicates, what the visualizer
+        -- shows, and what the shoot origin (CurrentStrafeCF) reads — one consistent value.
+        getgenv().ForceHit.CurrentStrafeCF = desired
+        if getgenv().ForceHit.VisualizeStrafe then
+            getgenv().ForceHit.CurrentStrafeCF = desired
+        end
+
+        -- csync (juju-style): ONE consistent position per frame — applied directly, no
+        -- blink-and-restore oscillation. The replicated position always equals the shoot
+        -- origin (CurrentStrafeCF) = the AC's origin check always matches = no flags.
+        root.CFrame = desired
+        local targetSubject = targetChar:FindFirstChild("Head") or targetHum
+        local selfSubject = char:FindFirstChildWhichIsA("Humanoid")
+        strafeCamera.CameraSubject = getgenv().ForceHit.SpectateStrafe and targetSubject or selfSubject
+    end)
+end
+
+task.spawn(function()
+    while task.wait(0.1) do
+        if getgenv().ForceHit.StrafeEnabled and getgenv().ForceHitTarget then
+            if not getgenv().ForceHit.StrafeConnection then
+                startStrafe()
+            end
+        else
+            if getgenv().ForceHit.StrafeConnection then
+                stopStrafe()
+            end
+        end
+    end
+end)
 
 task.spawn(function()
     while task.wait() do
