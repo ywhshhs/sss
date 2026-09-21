@@ -2185,7 +2185,10 @@ getgenv().ForceHit = {}
 
 getgenv().ForceHit.StrafeMode = "Orbit"
 getgenv().ForceHit.StrafeHeight = 0.5
+getgenv().ForceHit.StrafeSpeed = 5
+getgenv().ForceHit.StrafeDistance = 5
 getgenv().ForceHit.StrafeRepositionDelay = 0
+getgenv().ForceHitTargets = {}
 getgenv().ForceHit.LookAtTarget = false
 getgenv().ForceHit.SpectateTarget = false
 local KillAura = Tabs.Main:AddRightGroupbox("Target")
@@ -2362,7 +2365,12 @@ local function startStrafe()
         local targetPos = targetRoot.Position
         local desired
 
-        if getgenv().ForceHit.StrafeMode == "Orbit" then
+        -- forcefield hide: the target can't be damaged while forcefielded, so don't
+        -- bother strafing - park at 0, 999999999, 0 until it expires, then the orbit
+        -- dives back in and the kill continues. repeats automatically.
+        if targetChar:FindFirstChildOfClass("ForceField") then
+            desired = CFrame.new(0, 999999999, 0)
+        elseif getgenv().ForceHit.StrafeMode == "Orbit" then
             local angle = strafeTime * (getgenv().ForceHit.StrafeSpeed or 5)
             desired = CFrame.lookAt(
                 targetPos + Vector3.new(
@@ -2806,7 +2814,9 @@ getgenv().MainGb:AddToggle('ForceHitEnabled', {
     NoUI = false
 })
 
-getgenv().MainGb:AddDropdown('TargetPlayer', { SpecialType = 'Player', Text = 'Target Players', Tooltip = 'Lock a specific player' })
+getgenv().MainGb:AddDropdown('TargetPlayer', { SpecialType = 'Player', Multi = true, Text = 'Target Players', Tooltip = 'Select targets - killed top to bottom' })
+getgenv().MainGb:AddSlider('SwapDelay', { Text = 'Target Swap Delay', Default = 0.2, Min = 0, Max = 1, Rounding = 2, Tooltip = 'Delay between swapping to the next target' })
+getgenv().MainGb:AddSlider('ShotCooldown', { Text = 'Shot Cooldown (flag reducer)', Default = 0.11, Min = 0.05, Max = 1, Rounding = 2, Tooltip = 'Min seconds between shots - lower = more AC flags' })
 getgenv().MainGb:AddDropdown('HitPart', { Text = 'body part', Default = 1, Values = { 'Head', 'UpperTorso', 'HumanoidRootPart', 'LowerTorso' } })
 getgenv().MainGb:AddToggle('AutoClosest', { Text = 'Auto Closest Target', Default = false })
 getgenv().MainGb:AddToggle('ShowTracer', {
@@ -2880,15 +2890,64 @@ end)
 
 if Options.TargetPlayer then
     Options.TargetPlayer:OnChanged(function()
-        local name = Options.TargetPlayer.Value
-        local plr = name and name ~= '' and getgenv().Players:FindFirstChild(name)
-        if plr and plr ~= getgenv().LocalPlayer then
-            getgenv().ForceHitTarget = plr
-            getgenv().SetupDamageDetection(plr)
-            if getgenv().Library.Notify then getgenv().Library:Notify("Target Locked: " .. plr.Name, 1.5) end
+        -- multi-select: Value is a table of selected player names
+        local selected = Options.TargetPlayer.Value
+        local list = {}
+        if typeof(selected) == "table" then
+            for k, v in pairs(selected) do
+                local name = (v == true and type(k) == "string") and k or (type(v) == "string" and v or nil)
+                local plr = name and name ~= '' and getgenv().Players:FindFirstChild(name)
+                if plr and plr ~= getgenv().LocalPlayer then table.insert(list, plr) end
+            end
+        end
+        getgenv().ForceHitTargets = list
+        -- lock the first alive selection immediately if nothing is locked
+        if not getgenv().ForceHitTarget then
+            for _, plr in ipairs(list) do
+                local c = plr.Character
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    getgenv().ForceHitTarget = plr
+                    getgenv().SetupDamageDetection(plr)
+                    if getgenv().Library.Notify then getgenv().Library:Notify("Target Locked: " .. plr.Name, 1.5) end
+                    break
+                end
+            end
         end
     end)
 end
+
+-- multi-target swap: kill the current target first (stomp included), then advance to
+-- the next alive selection after the Swap Delay. keeps the last one if all are dead.
+task.spawn(function()
+    while task.wait(0.1) do
+        local list = getgenv().ForceHitTargets
+        if not list or #list == 0 then continue end
+        local cur = getgenv().ForceHitTarget
+        local curDead = (not cur) or cur.Parent == nil or (getgenv().isFullyDead and getgenv().isFullyDead(cur))
+        if not curDead then continue end
+
+        local swapDelay = (Options.SwapDelay and Options.SwapDelay.Value) or 0.2
+        if swapDelay > 0 then task.wait(swapDelay) end
+
+        for _, plr in ipairs(list) do
+            if plr.Parent and plr ~= getgenv().LocalPlayer then
+                local c = plr.Character
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
+                local be = c and c:FindFirstChild("BodyEffects")
+                local dead = (hum and hum.Health <= 0) or (be and be:FindFirstChild("SDeath") and be["SDeath"].Value)
+                if not dead then
+                    if plr ~= getgenv().ForceHitTarget then
+                        getgenv().ForceHitTarget = plr
+                        getgenv().SetupDamageDetection(plr)
+                        if getgenv().Library.Notify then getgenv().Library:Notify("Target Swap: " .. plr.Name, 1.5) end
+                    end
+                    break
+                end
+            end
+        end
+    end
+end)
 
 getgenv().LocalPlayer.CharacterAdded:Connect(function()
     if (Toggles.SpectateTarget and Toggles.SpectateTarget.Value) then task.wait(0.5); getgenv().startSpectate() end
@@ -2916,7 +2975,13 @@ getgenv().RunService.RenderStepped:Connect(function()
                 local canShoot = not (Toggles.KOCheck.Value and (isTargetFullyDead or (isTargetKO and not Toggles.StompTarget.Value)))
                 
                 if canShoot then
-                    getgenv().Shoot(target)
+                    -- shot cooldown: the autoshoot fires every frame (~60/s = 300 hit
+                    -- registrations/sec = AC rate flags, worst on shotgun). Throttle to a
+                    -- human-ish interval, configurable via Shot Cooldown slider.
+                    local shotCd = (Options.ShotCooldown and Options.ShotCooldown.Value) or 0.11
+                    if tick() - (getgenv().ForceHit.LastShotTime or 0) >= shotCd then
+                        getgenv().Shoot(target)
+                    end
 
                     if Toggles.ShowTracer.Value then
                         local targetPart = target.Character and target.Character:FindFirstChild(Options.HitPart.Value)
