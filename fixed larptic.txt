@@ -1654,6 +1654,7 @@ desync_setback.Parent = getgenv().Workspace
 getgenv().desync = {
     enabled = false,
     mode = "Void",
+    power = "Safe",
     old_position = nil,
     target_position = nil,
     void_time = 0.4,
@@ -1824,20 +1825,37 @@ getgenv().RunService.Heartbeat:Connect(function(dt)
     if not root then return end
     desync.old_position = root.CFrame
     local target = desync.old_position
+    -- power-scaled spoof offsets: the old fixed ±9e8 is past Roblox's 2^24 position
+    -- precision limit -> server receives clamped garbage -> instant AC flags.
+    -- Safe = small bounded offsets (minimal flags), Rage = original 9e8 behavior.
+    local power = getgenv().desync.power or "Safe"
+    local amp = (power == "Rage" and 9e8) or (power == "Balanced" and 2000) or 150
+    local yMin, yMax
+    if power == "Rage" then yMin, yMax = 1e8, 9e8
+    elseif power == "Balanced" then yMin, yMax = 200, 5000
+    else yMin, yMax = 60, 500 end
+    local function spoofOffset()
+        local ang = math.random() * math.pi * 2
+        local r = math.random() * amp
+        return Vector3.new(math.cos(ang) * r, yMin + math.random() * (yMax - yMin), math.sin(ang) * r)
+    end
     if desync.mode == "void" then
-        target = CFrame.new(root.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
+        target = CFrame.new(root.Position + spoofOffset())
     elseif desync.mode == "spam void" then
         desync.timer += dt
-        if desync.timer < desync.void_time then
-            target = CFrame.new(root.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
+        -- jitter cycle timing ±25% so the AC can't pattern-match fixed void/ground intervals
+        local voidTime = desync.void_time * (0.75 + math.random() * 0.5)
+        local normalTime = desync.normal_time * (0.75 + math.random() * 0.5)
+        if desync.timer < voidTime then
+            target = CFrame.new(root.Position + spoofOffset())
         end
-        if desync.timer >= desync.void_time + desync.normal_time then desync.timer = 0 end
+        if desync.timer >= voidTime + normalTime then desync.timer = 0 end
     elseif desync.mode == "Chaos" then
         local t = tick() * 999
-        target = CFrame.new(root.Position + Vector3.new(math.sin(t) * 9e8, math.abs(math.cos(t * 1.3)) * 9e8, math.sin(t * 0.7) * 9e8))
+        target = CFrame.new(root.Position + Vector3.new(math.sin(t) * amp, math.abs(math.cos(t * 1.3)) * yMax, math.sin(t * 0.7) * amp))
     elseif desync.mode == "Epilepsy" then
         local flip = math.floor(tick() * 60) % 2 == 0
-        target = flip and CFrame.new(root.Position + Vector3.new(9e8, 9e8, 9e8)) or CFrame.new(root.Position + Vector3.new(-9e8, -9e8, -9e8))
+        target = flip and CFrame.new(root.Position + Vector3.new(amp, yMax, amp)) or CFrame.new(root.Position + Vector3.new(-amp, yMin, -amp))
     elseif desync.mode == "Custom" then
         target = desync.old_position + desync.custom_offset
     elseif desync.mode == "Underground" then
@@ -1852,6 +1870,28 @@ getgenv().RunService.Heartbeat:Connect(function(dt)
     root.CFrame = desync.old_position
     desync_setback.CFrame = CFrame.new(0, -2000, 0)
     dResetCamera()
+end)
+
+-- Anti-Kick: blocks client-side LocalPlayer:Kick() coming from the game's anticheat
+-- threads. Kicks made by this script (staff protection) run on executor threads, so
+-- checkcaller() lets them through untouched.
+pcall(function()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = (getnamecallmethod and getnamecallmethod()) or ""
+        if method == "Kick" and self == getgenv().LocalPlayer
+            and not checkcaller()
+            and getgenv().LarpticAntiKick ~= false
+            and (not Toggles.AntiKickToggle or Toggles.AntiKickToggle.Value) then
+            getgenv().LarpticBlockedKicks = (getgenv().LarpticBlockedKicks or 0) + 1
+            if tick() - (getgenv().LarpticLastKickNotify or 0) > 10 then
+                getgenv().LarpticLastKickNotify = tick()
+                pcall(function() getgenv().Library:Notify("Blocked anticheat kick #" .. getgenv().LarpticBlockedKicks, 2) end)
+            end
+            return nil
+        end
+        return oldNamecall(self, ...)
+    end)
 end)
 
 getgenv().RunService.RenderStepped:Connect(function()
@@ -2002,6 +2042,17 @@ VoidGb:AddDropdown("DesyncMethod", {
     Values = {"void", "spam void", "Chaos", "Epilepsy", "Custom", "Underground"},
     Default = "void", Text = "Mode",
     Callback = function(v) getgenv().desync.mode = v end
+})
+
+VoidGb:AddDropdown("DesyncPower", {
+    Values = {"Safe", "Balanced", "Rage"},
+    Default = "Safe", Text = "Desync Power (lower = less flags)",
+    Callback = function(v) getgenv().desync.power = v end
+})
+
+VoidGb:AddToggle("AntiKickToggle", {
+    Text = "Anti Kick (block AC kicks)", Default = true,
+    Callback = function(v) getgenv().LarpticAntiKick = v end
 })
 
 VoidGb:AddToggle("ToolCheckToggle", {
@@ -2270,6 +2321,8 @@ ForceResetToggle:AddKeyPicker('ForceResetKey', {
 getgenv().ForceHit = {}
 
 getgenv().ForceHit.StrafeMode = "Orbit"
+getgenv().ForceHit.VoidHeight = 10000
+getgenv().ForceHit.StrafeRepositionDelay = 0
 getgenv().ForceHit.LookAtTarget = false
 getgenv().ForceHit.SpectateTarget = false
 local KillAura = Tabs.Main:AddRightGroupbox("Strafe")
@@ -2332,6 +2385,8 @@ KillAura:AddSlider("StrafeDistanceSlider", {Text="Strafe Distance", Min=1, Max=2
 KillAura:AddSlider("StrafeHeightSlider", {Text="Strafe Height", Min=-15, Max=15, Default=0, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeHeight=v end})
 
 KillAura:AddDropdown("StrafeModeDropdown", {Values={"Orbit","Random","Void Shoot"}, Default="Orbit", Text="Strafe Mode", Callback=function(v) getgenv().ForceHit.StrafeMode=v end})
+KillAura:AddSlider("VoidHeightSlider", {Text="Void Height", Min=100, Max=10000, Default=10000, Rounding=0, Callback=function(v) getgenv().ForceHit.VoidHeight=v end})
+KillAura:AddSlider("StrafeDelaySlider", {Text="Reposition Delay (flag reducer)", Min=0, Max=0.25, Default=0, Rounding=2, Callback=function(v) getgenv().ForceHit.StrafeRepositionDelay=v end})
 
 
 local function destroyStrafeVisualizer()
@@ -2403,6 +2458,7 @@ local function startStrafe()
     getgenv().ForceHit.LookAtTarget = false
 
     local strafeTime = 0
+    local lastReposition = 0
     local voidPhase = false
     local voidTimer = 0
 
@@ -2423,6 +2479,13 @@ local function startStrafe()
         if not (root and targetRoot and targetHum and targetHum.Health > 0) then
             stopStrafe()
             return
+        end
+
+        -- reposition throttle: fewer replicated teleports per second = fewer AC flags
+        local repositionDelay = getgenv().ForceHit.StrafeRepositionDelay or 0
+        if repositionDelay > 0 then
+            if (strafeTime - lastReposition) < repositionDelay then return end
+            lastReposition = strafeTime
         end
 
         local targetPos = targetRoot.Position
@@ -2478,7 +2541,7 @@ local function startStrafe()
                         voidTimer = 0
                     end
                     desired = CFrame.new(
-                        targetPos + Vector3.new(0, 10000, 0)
+                        targetPos + Vector3.new(0, (getgenv().ForceHit.VoidHeight or 10000), 0)
                     )
                 end
             end
