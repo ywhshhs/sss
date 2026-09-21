@@ -988,6 +988,8 @@ end
 
 getgenv().Shoot = function(p)
     if not p or not p.Character then return end
+    -- don't fire while WE are knocked/K.O.'d (low hp) - wait till back above it
+    if localPlayerIsKO() then return end
     local character = p.Character
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     
