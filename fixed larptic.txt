@@ -2816,7 +2816,6 @@ getgenv().MainGb:AddToggle('ForceHitEnabled', {
 
 getgenv().MainGb:AddDropdown('TargetPlayer', { SpecialType = 'Player', Multi = true, Text = 'Target Players', Tooltip = 'Select targets - killed top to bottom' })
 getgenv().MainGb:AddSlider('SwapDelay', { Text = 'Target Swap Delay', Default = 0.2, Min = 0, Max = 1, Rounding = 2, Tooltip = 'Delay between swapping to the next target' })
-getgenv().MainGb:AddSlider('ShotCooldown', { Text = 'Shot Cooldown (flag reducer)', Default = 0.11, Min = 0.05, Max = 1, Rounding = 2, Tooltip = 'Min seconds between shots - lower = more AC flags' })
 getgenv().MainGb:AddDropdown('HitPart', { Text = 'body part', Default = 1, Values = { 'Head', 'UpperTorso', 'HumanoidRootPart', 'LowerTorso' } })
 getgenv().MainGb:AddToggle('AutoClosest', { Text = 'Auto Closest Target', Default = false })
 getgenv().MainGb:AddToggle('ShowTracer', {
@@ -2976,10 +2975,9 @@ getgenv().RunService.RenderStepped:Connect(function()
                 
                 if canShoot then
                     -- shot cooldown: the autoshoot fires every frame (~60/s = 300 hit
-                    -- registrations/sec = AC rate flags, worst on shotgun). Throttle to a
-                    -- human-ish interval, configurable via Shot Cooldown slider.
-                    local shotCd = (Options.ShotCooldown and Options.ShotCooldown.Value) or 0.11
-                    if tick() - (getgenv().ForceHit.LastShotTime or 0) >= shotCd then
+                    -- registrations/sec = AC rate flags, worst on shotgun). Fixed 0.1s
+                    -- interval = ~10 shots/sec.
+                    if tick() - (getgenv().ForceHit.LastShotTime or 0) >= 0.1 then
                         getgenv().Shoot(target)
                     end
 
