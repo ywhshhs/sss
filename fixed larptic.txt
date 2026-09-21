@@ -988,8 +988,6 @@ end
 
 getgenv().Shoot = function(p)
     if not p or not p.Character then return end
-    -- don't fire while WE are knocked/K.O.'d (low hp) - wait till back above it
-    if localPlayerIsKO() then return end
     local character = p.Character
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     
@@ -2971,10 +2969,9 @@ getgenv().RunService.RenderStepped:Connect(function()
                 local canShoot = not (Toggles.KOCheck.Value and (isTargetFullyDead or (isTargetKO and not Toggles.StompTarget.Value)))
                 
                 if canShoot then
-                    -- shot cooldown: fixed 0.1s interval (~10 shots/sec). While strafing,
-                    -- the strafe loop drives its own fire timing (shoot-then-step) and the
-                    -- autoshoot stays silent - a fire right after a step = origin mismatch.
-                    if not getgenv().ForceHit.StrafeEnabled and tick() - (getgenv().ForceHit.LastShotTime or 0) >= 0.1 then
+                    -- while strafing the strafe loop drives fire timing (shoot-then-step);
+                    -- autoshoot stays silent or a fire right after a step = origin mismatch
+                    if not getgenv().ForceHit.StrafeEnabled then
                         getgenv().Shoot(target)
                     end
 
