@@ -2328,8 +2328,6 @@ local function startStrafe()
         return Vector3.new(math.cos(strafeAngle) * dist, h, math.sin(strafeAngle) * dist)
     end
     getgenv().ForceHit.StrafeConnection = RunService.Heartbeat:Connect(function(dt)
-        strafeTime += dt
-
         if not getgenv().ForceHit.StrafeEnabled or not getgenv().ForceHitTarget then
             stopStrafe()
             return
@@ -2895,6 +2893,18 @@ if Options.TargetPlayer then
             end
         end
         getgenv().ForceHitTargets = list
+        -- if the current target was unselected, drop it (this is what stuck the
+        -- spectate/tracers on the old player until forcehit was toggled off)
+        local stillSelected = false
+        for _, plr in ipairs(list) do
+            if plr == getgenv().ForceHitTarget then stillSelected = true break end
+        end
+        if not stillSelected then
+            getgenv().ForceHitTarget = nil
+            getgenv().SetupDamageDetection(nil)
+            if getgenv().TracerLine then getgenv().TracerLine.Visible = false end
+            if getgenv().TracerOutline then getgenv().TracerOutline.Visible = false end
+        end
         -- lock the first alive selection immediately if nothing is locked
         if not getgenv().ForceHitTarget then
             for _, plr in ipairs(list) do
