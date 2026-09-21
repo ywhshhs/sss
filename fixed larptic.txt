@@ -1167,19 +1167,6 @@ local function startStrafe()
             local t = strafeTime * 20
             local offset = Vector3.new(math.noise(t, 0, 0) * 15, Options.StrafeHeightSlider.Value, math.noise(0, 0, t) * 15)
             desired = CFrame.lookAt(targetPos + offset, targetPos)
-            
-        elseif mode == "Void Shoot" then
-            voidTimer = voidTimer + dt
-            local isShooting = (tick() - (getgenv().LastShotTime or 0) < 0.1)
-            
-            if isShooting then
-                desired = CFrame.lookAt(targetPos + Vector3.new(0, 150, 2), targetPos) 
-                if voidTimer >= 0.13 then 
-                    voidPhase = not voidPhase
-                    voidTimer = 0
-                end
-                desired = voidPhase and CFrame.new(targetPos + Vector3.new(0, 1000, 0)) or CFrame.lookAt(targetPos + Vector3.new(0, 3, 3), targetPos)
-            end
         end
 
         if desired then
@@ -2258,8 +2245,6 @@ getgenv().ForceHit = {}
 
 getgenv().ForceHit.StrafeMode = "Orbit"
 getgenv().ForceHit.StrafeHeight = 0.5
-getgenv().ForceHit.VoidShootDelay = 0.07
-getgenv().ForceHit.VoidHeight = 10000
 getgenv().ForceHit.StrafeRepositionDelay = 0
 getgenv().ForceHit.LookAtTarget = false
 getgenv().ForceHit.SpectateTarget = false
@@ -2303,10 +2288,8 @@ toggle:AddKeyPicker("StrafeKeybind", {Default="N", Mode="Toggle", NoSync=true, T
     end
 end})
 
-KillAura:AddToggle("spoofstrafe", {Text="Spoof", Default=false, Callback=function(v)
-    getgenv().ForceHit.strafespoof = v
-    if not v then resetStrafeCamera() end
-end})
+-- "Spoof" toggle removed: the old blink-spoof (teleport + restore) caused real/spoof
+-- oscillation = origin mismatch flags. Replaced by juju-style consistent csync apply.
 
 KillAura:AddToggle("visualizestrafe", {Text="Visualize Strafe", Default=false, Callback=function(v)
     getgenv().ForceHit.VisualizeStrafe = v
@@ -2322,10 +2305,8 @@ KillAura:AddSlider("StrafeSpeedSlider", {Text="Strafe Speed", Min=1, Max=30, Def
 KillAura:AddSlider("StrafeDistanceSlider", {Text="Strafe Distance", Min=1, Max=20, Default=5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeDistance=v end})
 KillAura:AddSlider("StrafeHeightSlider", {Text="Strafe Height", Min=-15, Max=15, Default=0.5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeHeight=v end})
 
-KillAura:AddDropdown("StrafeModeDropdown", {Values={"Orbit","Random","Void Shoot"}, Default="Orbit", Text="Strafe Mode", Callback=function(v) getgenv().ForceHit.StrafeMode=v end})
-KillAura:AddSlider("VoidHeightSlider", {Text="Void Height", Min=100, Max=10000, Default=10000, Rounding=0, Callback=function(v) getgenv().ForceHit.VoidHeight=v end})
+KillAura:AddDropdown("StrafeModeDropdown", {Values={"Orbit","Random"}, Default="Orbit", Text="Strafe Mode", Callback=function(v) getgenv().ForceHit.StrafeMode=v end})
 KillAura:AddSlider("StrafeDelaySlider", {Text="Reposition Delay (flag reducer)", Min=0, Max=0.25, Default=0, Rounding=2, Callback=function(v) getgenv().ForceHit.StrafeRepositionDelay=v end})
-KillAura:AddSlider("VoidShootDelaySlider", {Text="Void Shoot Delay", Min=0.03, Max=0.3, Default=0.07, Rounding=2, Callback=function(v) getgenv().ForceHit.VoidShootDelay=v end})
 
 
 local function destroyStrafeVisualizer()
@@ -2398,8 +2379,6 @@ local function startStrafe()
 
     local strafeTime = 0
     local lastReposition = 0
-    local voidPhase = false
-    local voidTimer = 0
 
     getgenv().ForceHit.StrafeConnection = RunService.Heartbeat:Connect(function(dt)
         strafeTime += dt
@@ -2449,55 +2428,24 @@ local function startStrafe()
                 math.noise(0,0,t) * 20
             )
             desired = CFrame.lookAt(targetPos + offset, targetPos)
-
-        elseif getgenv().ForceHit.StrafeMode == "Void Shoot" then
-            -- cycle: dwell at void -> teleport near target -> dwell 0.07s (lets replication
-            -- catch up so the shoot origin matches what the server sees = no origin mismatch
-            -- flags) -> fire -> back to void. delay configurable via Void Shoot Delay slider.
-            local stepDelay = getgenv().ForceHit.VoidShootDelay or 0.07
-            voidTimer += dt
-            local voidPos = CFrame.new(targetPos + Vector3.new(0, (getgenv().ForceHit.VoidHeight or 10000), 0))
-            local nearPos = CFrame.lookAt(targetPos + Vector3.new(0, 3, 2), targetPos)
-            if not voidPhase then
-                desired = voidPos
-                getgenv().ForceHit.CurrentStrafeCF = voidPos
-                if voidTimer >= stepDelay then
-                    voidPhase = true
-                    voidTimer = 0
-                end
-            else
-                desired = nearPos
-                getgenv().ForceHit.CurrentStrafeCF = nearPos
-                if voidTimer >= stepDelay then
-                    pcall(function() getgenv().Shoot(getgenv().ForceHitTarget) end)
-                    voidPhase = false
-                    voidTimer = 0
-                end
-            end
         end
 
         if not desired then return end
 
+        -- csync (juju-style): the orbit position is what replicates, what the visualizer
+        -- shows, and what the shoot origin (CurrentStrafeCF) reads — one consistent value.
+        getgenv().ForceHit.CurrentStrafeCF = desired
         if getgenv().ForceHit.VisualizeStrafe then
             getgenv().ForceHit.CurrentStrafeCF = desired
         end
 
-        -- Void Shoot must teleport DIRECTLY (no blink-spoof): the server has to track the
-        -- void<->near movement or the fire origin mismatches replication
-        if getgenv().ForceHit.strafespoof and getgenv().ForceHit.StrafeMode ~= "Void Shoot" then
-            local real = root.CFrame
-            DesyncPart.CFrame = real + Vector3.new(0, 5, 0)
-            strafeCamera.CameraSubject = DesyncPart
-            root.CFrame = desired
-            RunService.RenderStepped:Wait()
-            root.CFrame = real
-            resetStrafeCamera()
-        else
-            root.CFrame = desired
-            local targetSubject = targetChar:FindFirstChild("Head") or targetHum
-            local selfSubject = char:FindFirstChildWhichIsA("Humanoid")
-            strafeCamera.CameraSubject = getgenv().ForceHit.SpectateStrafe and targetSubject or selfSubject
-        end
+        -- csync (juju-style): ONE consistent position per frame — applied directly, no
+        -- blink-and-restore oscillation. The replicated position always equals the shoot
+        -- origin (CurrentStrafeCF) = the AC's origin check always matches = no flags.
+        root.CFrame = desired
+        local targetSubject = targetChar:FindFirstChild("Head") or targetHum
+        local selfSubject = char:FindFirstChildWhichIsA("Humanoid")
+        strafeCamera.CameraSubject = getgenv().ForceHit.SpectateStrafe and targetSubject or selfSubject
     end)
 end
 
