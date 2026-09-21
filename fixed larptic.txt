@@ -2323,8 +2323,14 @@ local function startStrafe()
 
     getgenv().ForceHit.LookAtTarget = false
 
-    local strafeTime = 0
-    local lastReposition = 0
+    local strafeAngle = 0
+    local stepTimer = 0
+    local heldPos = nil
+    local function orbitOffset()
+        local dist = getgenv().ForceHit.StrafeDistance or 5
+        local h = getgenv().ForceHit.StrafeHeight or 0.5
+        return Vector3.new(math.cos(strafeAngle) * dist, h, math.sin(strafeAngle) * dist)
+    end
 
     getgenv().ForceHit.StrafeConnection = RunService.Heartbeat:Connect(function(dt)
         strafeTime += dt
@@ -2357,13 +2363,6 @@ local function startStrafe()
             end
         end
 
-        -- reposition throttle: fewer replicated teleports per second = fewer AC flags
-        local repositionDelay = getgenv().ForceHit.StrafeRepositionDelay or 0
-        if repositionDelay > 0 then
-            if (strafeTime - lastReposition) < repositionDelay then return end
-            lastReposition = strafeTime
-        end
-
         local targetPos = targetRoot.Position
         local desired
 
@@ -2372,39 +2371,38 @@ local function startStrafe()
         -- dives back in and the kill continues. repeats automatically.
         if targetChar:FindFirstChildOfClass("ForceField") then
             desired = CFrame.new(0, 999999999, 0)
-        elseif getgenv().ForceHit.StrafeMode == "Orbit" then
-            local angle = strafeTime * (getgenv().ForceHit.StrafeSpeed or 5)
-            desired = CFrame.lookAt(
-                targetPos + Vector3.new(
-                    math.cos(angle) * (getgenv().ForceHit.StrafeDistance or 8),
-                    getgenv().ForceHit.StrafeHeight or 0,
-                    math.sin(angle) * (getgenv().ForceHit.StrafeDistance or 8)
-                ),
-                targetPos
-            )
-
-        elseif getgenv().ForceHit.StrafeMode == "Random" then
-            local t = strafeTime * 40
-            local offset = Vector3.new(
-                math.noise(t,0,0) * 20,
-                math.noise(0,t,0) * 15 + (getgenv().ForceHit.StrafeHeight or 0),
-                math.noise(0,0,t) * 20
-            )
-            desired = CFrame.lookAt(targetPos + offset, targetPos)
+            heldPos = nil
+        else
+            -- SHOOT FIRST, THEN STEP (discrete orbit): hold each orbit point for the step
+            -- delay so replication fully catches up, fire while settled (origin = where we
+            -- stand = what the server sees = no mismatch), THEN advance to the next point.
+            -- The held point is an absolute world position, so fast-moving targets can't
+            -- drag our origin around mid-dwell.
+            local stepDelay = math.max(getgenv().ForceHit.StrafeRepositionDelay or 0, 0.1)
+            stepTimer += dt
+            if not heldPos then
+                heldPos = targetPos + orbitOffset()
+            elseif stepTimer >= stepDelay then
+                stepTimer = 0
+                -- 1) shoot FIRST, while settled at the held point
+                if getgenv().ForceHitTarget then
+                    pcall(function() getgenv().Shoot(getgenv().ForceHitTarget) end)
+                end
+                -- 2) THEN teleport to the next point around the target's current spot
+                if getgenv().ForceHit.StrafeMode == "Random" then
+                    strafeAngle = math.random() * math.pi * 2
+                else
+                    strafeAngle += (getgenv().ForceHit.StrafeSpeed or 5) * stepDelay
+                end
+                heldPos = targetPos + orbitOffset()
+            end
+            desired = CFrame.lookAt(heldPos, targetPos)
         end
 
         if not desired then return end
 
-        -- csync (juju-style): the orbit position is what replicates, what the visualizer
-        -- shows, and what the shoot origin (CurrentStrafeCF) reads — one consistent value.
+        -- csync: the held position is what replicates AND what the shoot origin reads
         getgenv().ForceHit.CurrentStrafeCF = desired
-        if getgenv().ForceHit.VisualizeStrafe then
-            getgenv().ForceHit.CurrentStrafeCF = desired
-        end
-
-        -- csync (juju-style): ONE consistent position per frame — applied directly, no
-        -- blink-and-restore oscillation. The replicated position always equals the shoot
-        -- origin (CurrentStrafeCF) = the AC's origin check always matches = no flags.
         root.CFrame = desired
         local targetSubject = targetChar:FindFirstChild("Head") or targetHum
         local selfSubject = char:FindFirstChildWhichIsA("Humanoid")
@@ -2976,10 +2974,10 @@ getgenv().RunService.RenderStepped:Connect(function()
                 local canShoot = not (Toggles.KOCheck.Value and (isTargetFullyDead or (isTargetKO and not Toggles.StompTarget.Value)))
                 
                 if canShoot then
-                    -- shot cooldown: the autoshoot fires every frame (~60/s = 300 hit
-                    -- registrations/sec = AC rate flags, worst on shotgun). Fixed 0.1s
-                    -- interval = ~10 shots/sec.
-                    if tick() - (getgenv().ForceHit.LastShotTime or 0) >= 0.1 then
+                    -- shot cooldown: fixed 0.1s interval (~10 shots/sec). While strafing,
+                    -- the strafe loop drives its own fire timing (shoot-then-step) and the
+                    -- autoshoot stays silent - a fire right after a step = origin mismatch.
+                    if not getgenv().ForceHit.StrafeEnabled and tick() - (getgenv().ForceHit.LastShotTime or 0) >= 0.1 then
                         getgenv().Shoot(target)
                     end
 
