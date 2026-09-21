@@ -1654,7 +1654,6 @@ desync_setback.Parent = getgenv().Workspace
 getgenv().desync = {
     enabled = false,
     mode = "Void",
-    power = "Safe",
     old_position = nil,
     target_position = nil,
     void_time = 0.4,
@@ -1825,37 +1824,20 @@ getgenv().RunService.Heartbeat:Connect(function(dt)
     if not root then return end
     desync.old_position = root.CFrame
     local target = desync.old_position
-    -- power-scaled spoof offsets: the old fixed ±9e8 is past Roblox's 2^24 position
-    -- precision limit -> server receives clamped garbage -> instant AC flags.
-    -- Safe = small bounded offsets (minimal flags), Rage = original 9e8 behavior.
-    local power = getgenv().desync.power or "Safe"
-    local amp = (power == "Rage" and 9e8) or (power == "Balanced" and 2000) or 150
-    local yMin, yMax
-    if power == "Rage" then yMin, yMax = 1e8, 9e8
-    elseif power == "Balanced" then yMin, yMax = 200, 5000
-    else yMin, yMax = 60, 500 end
-    local function spoofOffset()
-        local ang = math.random() * math.pi * 2
-        local r = math.random() * amp
-        return Vector3.new(math.cos(ang) * r, yMin + math.random() * (yMax - yMin), math.sin(ang) * r)
-    end
     if desync.mode == "void" then
-        target = CFrame.new(root.Position + spoofOffset())
+        target = CFrame.new(root.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
     elseif desync.mode == "spam void" then
         desync.timer += dt
-        -- jitter cycle timing ±25% so the AC can't pattern-match fixed void/ground intervals
-        local voidTime = desync.void_time * (0.75 + math.random() * 0.5)
-        local normalTime = desync.normal_time * (0.75 + math.random() * 0.5)
-        if desync.timer < voidTime then
-            target = CFrame.new(root.Position + spoofOffset())
+        if desync.timer < desync.void_time then
+            target = CFrame.new(root.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
         end
-        if desync.timer >= voidTime + normalTime then desync.timer = 0 end
+        if desync.timer >= desync.void_time + desync.normal_time then desync.timer = 0 end
     elseif desync.mode == "Chaos" then
         local t = tick() * 999
-        target = CFrame.new(root.Position + Vector3.new(math.sin(t) * amp, math.abs(math.cos(t * 1.3)) * yMax, math.sin(t * 0.7) * amp))
+        target = CFrame.new(root.Position + Vector3.new(math.sin(t) * 9e8, math.abs(math.cos(t * 1.3)) * 9e8, math.sin(t * 0.7) * 9e8))
     elseif desync.mode == "Epilepsy" then
         local flip = math.floor(tick() * 60) % 2 == 0
-        target = flip and CFrame.new(root.Position + Vector3.new(amp, yMax, amp)) or CFrame.new(root.Position + Vector3.new(-amp, yMin, -amp))
+        target = flip and CFrame.new(root.Position + Vector3.new(9e8, 9e8, 9e8)) or CFrame.new(root.Position + Vector3.new(-9e8, -9e8, -9e8))
     elseif desync.mode == "Custom" then
         target = desync.old_position + desync.custom_offset
     elseif desync.mode == "Underground" then
@@ -2027,7 +2009,7 @@ VoidGb:AddToggle("DesyncToggle", {
     Text = "enable desync", Default = false,
     Callback = function(v)
         Toggles.DesyncToggle:SetText(v and "Anti Aim: ON" or "Anti Aim: OFF")
-        if not v then setDesync(false) end
+        setDesync(v)
     end
 }):AddKeyPicker("DesyncKeybind", {
     Text = "Bind", Default = "V", Mode = "Toggle",
@@ -2042,12 +2024,6 @@ VoidGb:AddDropdown("DesyncMethod", {
     Values = {"void", "spam void", "Chaos", "Epilepsy", "Custom", "Underground"},
     Default = "void", Text = "Mode",
     Callback = function(v) getgenv().desync.mode = v end
-})
-
-VoidGb:AddDropdown("DesyncPower", {
-    Values = {"Safe", "Balanced", "Rage"},
-    Default = "Safe", Text = "Desync Power (lower = less flags)",
-    Callback = function(v) getgenv().desync.power = v end
 })
 
 VoidGb:AddToggle("AntiKickToggle", {
@@ -2276,51 +2252,13 @@ local function applyAutoBox()
     local AutoBox = AutoGb
     local MoveBox = getgenv().Tabs.Misc:AddRightGroupbox('Movement')
     
-local Players = game:GetService("Players")
-local StarterGui = game:GetService("StarterGui")
-local LocalPlayer = Players.LocalPlayer
-local function PerformReset()
-    StarterGui:SetCore("ResetButtonCallback", true)
-    local character = LocalPlayer.Character
-    if character then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        
-        if getgenv().replicatesignal then
-            getgenv().replicatesignal(LocalPlayer.Kill)
-        elseif humanoid then
-            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
-            humanoid.Health = 0 
-        end
-    end
-end
-
-local ForceResetToggle = AutoBox:AddToggle('ForceReset', {
-    Text = 'Force Reset',
-    Default = false,
-    Tooltip = 'Enable this to allow the Keybind to work',
-    SyncToggleState = false,
-    Callback = function(Value)
-        if Value then
-            PerformReset()
-        end
-    end
-})
-
-ForceResetToggle:AddKeyPicker('ForceResetKey', {
-    Default = 'P',
-    Mode = 'Toggle',
-    Text = 'Force Reset',
-    NoUI = false,
-    Callback = function()
-        if Toggles.ForceReset.Value then
-            PerformReset()
-        end
-    end
-})
+-- Force Reset removed entirely: replicates a self-kill signal, instant AC kick
 
 getgenv().ForceHit = {}
 
 getgenv().ForceHit.StrafeMode = "Orbit"
+getgenv().ForceHit.StrafeHeight = 0.5
+getgenv().ForceHit.VoidShootDelay = 0.07
 getgenv().ForceHit.VoidHeight = 10000
 getgenv().ForceHit.StrafeRepositionDelay = 0
 getgenv().ForceHit.LookAtTarget = false
@@ -2382,11 +2320,12 @@ end})
 
 KillAura:AddSlider("StrafeSpeedSlider", {Text="Strafe Speed", Min=1, Max=30, Default=5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeSpeed=v end})
 KillAura:AddSlider("StrafeDistanceSlider", {Text="Strafe Distance", Min=1, Max=20, Default=5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeDistance=v end})
-KillAura:AddSlider("StrafeHeightSlider", {Text="Strafe Height", Min=-15, Max=15, Default=0, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeHeight=v end})
+KillAura:AddSlider("StrafeHeightSlider", {Text="Strafe Height", Min=-15, Max=15, Default=0.5, Rounding=1, Callback=function(v) getgenv().ForceHit.StrafeHeight=v end})
 
 KillAura:AddDropdown("StrafeModeDropdown", {Values={"Orbit","Random","Void Shoot"}, Default="Orbit", Text="Strafe Mode", Callback=function(v) getgenv().ForceHit.StrafeMode=v end})
 KillAura:AddSlider("VoidHeightSlider", {Text="Void Height", Min=100, Max=10000, Default=10000, Rounding=0, Callback=function(v) getgenv().ForceHit.VoidHeight=v end})
 KillAura:AddSlider("StrafeDelaySlider", {Text="Reposition Delay (flag reducer)", Min=0, Max=0.25, Default=0, Rounding=2, Callback=function(v) getgenv().ForceHit.StrafeRepositionDelay=v end})
+KillAura:AddSlider("VoidShootDelaySlider", {Text="Void Shoot Delay", Min=0.03, Max=0.3, Default=0.07, Rounding=2, Callback=function(v) getgenv().ForceHit.VoidShootDelay=v end})
 
 
 local function destroyStrafeVisualizer()
@@ -2512,37 +2451,27 @@ local function startStrafe()
             desired = CFrame.lookAt(targetPos + offset, targetPos)
 
         elseif getgenv().ForceHit.StrafeMode == "Void Shoot" then
+            -- cycle: dwell at void -> teleport near target -> dwell 0.07s (lets replication
+            -- catch up so the shoot origin matches what the server sees = no origin mismatch
+            -- flags) -> fire -> back to void. delay configurable via Void Shoot Delay slider.
+            local stepDelay = getgenv().ForceHit.VoidShootDelay or 0.07
             voidTimer += dt
-            local isShooting = tick() - (getgenv().ForceHit.LastShotTime or 0) < 0.12
-
-            if isShooting then
-                voidPhase = false
-                voidTimer = 0
-                desired = CFrame.lookAt(
-                    targetPos + Vector3.new(0, 200, 2),
-                    targetPos
-                )
+            local voidPos = CFrame.new(targetPos + Vector3.new(0, (getgenv().ForceHit.VoidHeight or 10000), 0))
+            local nearPos = CFrame.lookAt(targetPos + Vector3.new(0, 3, 2), targetPos)
+            if not voidPhase then
+                desired = voidPos
+                getgenv().ForceHit.CurrentStrafeCF = voidPos
+                if voidTimer >= stepDelay then
+                    voidPhase = true
+                    voidTimer = 0
+                end
             else
-                local voidTime = getgenv().ForceHit.VoidTime or 0.4
-                local groundTime = getgenv().ForceHit.GroundTime or 0.133
-
-                if not voidPhase then
-                    if voidTimer >= groundTime then
-                        voidPhase = true
-                        voidTimer = 0
-                    end
-                    desired = CFrame.lookAt(
-                        targetPos + Vector3.new(0, 3, 2),
-                        targetPos
-                    )
-                else
-                    if voidTimer >= voidTime then
-                        voidPhase = false
-                        voidTimer = 0
-                    end
-                    desired = CFrame.new(
-                        targetPos + Vector3.new(0, (getgenv().ForceHit.VoidHeight or 10000), 0)
-                    )
+                desired = nearPos
+                getgenv().ForceHit.CurrentStrafeCF = nearPos
+                if voidTimer >= stepDelay then
+                    pcall(function() getgenv().Shoot(getgenv().ForceHitTarget) end)
+                    voidPhase = false
+                    voidTimer = 0
                 end
             end
         end
@@ -2553,7 +2482,9 @@ local function startStrafe()
             getgenv().ForceHit.CurrentStrafeCF = desired
         end
 
-        if getgenv().ForceHit.strafespoof then
+        -- Void Shoot must teleport DIRECTLY (no blink-spoof): the server has to track the
+        -- void<->near movement or the fire origin mismatches replication
+        if getgenv().ForceHit.strafespoof and getgenv().ForceHit.StrafeMode ~= "Void Shoot" then
             local real = root.CFrame
             DesyncPart.CFrame = real + Vector3.new(0, 5, 0)
             strafeCamera.CameraSubject = DesyncPart
