@@ -2340,6 +2340,18 @@ local function startStrafe()
             return
         end
 
+        -- stomp pause: with Stomp Target on, freeze strafing once the target is at knock
+        -- HP (15) or already K.O.'d — the strafe teleports were fighting the stomp loop's
+        -- teleport so the stomp could never land. Strafing resumes automatically once the
+        -- target is stomped (dies -> full stop) or back above the threshold.
+        if getgenv().stompTargetEnabled then
+            local tbody = targetChar:FindFirstChild("BodyEffects")
+            local tko = tbody and tbody:FindFirstChild("K.O") and tbody["K.O"].Value
+            if tko or targetHum.Health <= 15 then
+                return
+            end
+        end
+
         -- reposition throttle: fewer replicated teleports per second = fewer AC flags
         local repositionDelay = getgenv().ForceHit.StrafeRepositionDelay or 0
         if repositionDelay > 0 then
