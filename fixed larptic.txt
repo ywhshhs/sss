@@ -2325,12 +2325,10 @@ local function startStrafe()
 
     local strafeAngle = 0
     local stepTimer = 0
+    local moveTimer = 0
+    local movePhase = false
     local heldPos = nil
-    local function orbitOffset()
-        local dist = getgenv().ForceHit.StrafeDistance or 5
-        local h = getgenv().ForceHit.StrafeHeight or 0.5
-        return Vector3.new(math.cos(strafeAngle) * dist, h, math.sin(strafeAngle) * dist)
-    end
+    local moveFrom, moveTo = nil, nil
 
     getgenv().ForceHit.StrafeConnection = RunService.Heartbeat:Connect(function(dt)
         strafeTime += dt
@@ -2373,30 +2371,49 @@ local function startStrafe()
             desired = CFrame.new(0, 999999999, 0)
             heldPos = nil
         else
-            -- SHOOT FIRST, THEN STEP (discrete orbit): hold each orbit point for the step
-            -- delay so replication fully catches up, fire while settled (origin = where we
-            -- stand = what the server sees = no mismatch), THEN advance to the next point.
-            -- The held point is an absolute world position, so fast-moving targets can't
-            -- drag our origin around mid-dwell.
-            local stepDelay = math.max(getgenv().ForceHit.StrafeRepositionDelay or 0, 0.1)
-            stepTimer += dt
+            -- SHOOT, THEN GLIDE (2-phase orbit): dwell at the point (replication settles),
+            -- fire while settled (origin = what the server sees = no mismatch), then glide
+            -- to the next point in small sub-steps instead of one big teleport. The speed
+            -- slider is the real angular speed again — it covers speed*dist studs of arc
+            -- per cycle, spread smoothly over the glide.
+            local dwell = math.max(getgenv().ForceHit.StrafeRepositionDelay or 0, 0.1)
+            local MOVE_TIME = 0.08
+            local dist = getgenv().ForceHit.StrafeDistance or 5
+            local h = getgenv().ForceHit.StrafeHeight or 0.5
+
             if not heldPos then
-                heldPos = targetPos + orbitOffset()
-            elseif stepTimer >= stepDelay then
-                stepTimer = 0
-                -- 1) shoot FIRST, while settled at the held point
-                if getgenv().ForceHitTarget then
-                    pcall(function() getgenv().Shoot(getgenv().ForceHitTarget) end)
+                -- first point: take it instantly
+                heldPos = targetPos + Vector3.new(math.cos(strafeAngle) * dist, h, math.sin(strafeAngle) * dist)
+            elseif movePhase then
+                moveTimer += dt
+                local alpha = math.min(moveTimer / MOVE_TIME, 1)
+                heldPos = moveFrom:Lerp(moveTo, alpha)
+                if alpha >= 1 then
+                    movePhase = false
+                    stepTimer = 0
+                    heldPos = moveTo
                 end
-                -- 2) THEN teleport to the next point around the target's current spot
-                if getgenv().ForceHit.StrafeMode == "Random" then
-                    strafeAngle = math.random() * math.pi * 2
-                else
-                    strafeAngle += (getgenv().ForceHit.StrafeSpeed or 5) * stepDelay
+            else
+                stepTimer += dt
+                if stepTimer >= dwell then
+                    -- 1) shoot FIRST, settled at the held point
+                    if getgenv().ForceHitTarget then
+                        pcall(function() getgenv().Shoot(getgenv().ForceHitTarget) end)
+                    end
+                    -- 2) THEN glide to the next point around the target's current spot
+                    strafeAngle += (getgenv().ForceHit.StrafeSpeed or 5) * (dwell + MOVE_TIME)
+                    if getgenv().ForceHit.StrafeMode == "Random" then
+                        strafeAngle = math.random() * math.pi * 2
+                    end
+                    moveFrom = heldPos
+                    moveTo = targetPos + Vector3.new(math.cos(strafeAngle) * dist, h, math.sin(strafeAngle) * dist)
+                    movePhase = true
+                    moveTimer = 0
                 end
-                heldPos = targetPos + orbitOffset()
             end
-            desired = CFrame.lookAt(heldPos, targetPos)
+            if heldPos then
+                desired = CFrame.lookAt(heldPos, targetPos)
+            end
         end
 
         if not desired then return end
